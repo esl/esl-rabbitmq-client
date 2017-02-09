@@ -10,3 +10,5 @@ rel/example_project
 .rebar
 .erlang.mk/
 esl_rabbitmq_client.d
+logs/
+elvis

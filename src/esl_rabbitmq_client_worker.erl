@@ -176,24 +176,26 @@ handle_call( {consume_messages, QueueSubscription, MsgsHandler}
                                                 ),
   {reply, ok, State};
 handle_call(Request, From, State) ->
-  io:format( "Unknown request -> ~p received from ~p when state was -> ~n~p"
-           , [Request, From, State]
-           ),
+  error_logger:info_msg(
+    "Unknown request -> ~p received from ~p when state was -> ~n~p",
+    [Request, From, State]),
   {noreply, State}.
 
 
 -spec handle_info(Info::timeout | term(), State::state()) ->
   {noreply, state()}.
 handle_info(Info, State) ->
-  _ = io:format( "Unknown information received -> ~p when state was -> ~n~p"
-               , [Info, State]
-               ),
+  error_logger:info_msg(
+    "Unknown information received -> ~p when state was -> ~n~p",
+    [Info, State]),
   {noreply, State}.
 
 -spec handle_cast(Request::term(), State::state()) ->
   {noreply, state()}.
 handle_cast(Request, State) ->
-  io:format("Unknown async request -> ~p when state was ~p~n", [Request, State]),
+  error_logger:info_msg(
+    "Unknown async request -> ~p when state was ~p~n",
+    [Request, State]),
   {noreply, State}.
 
 
@@ -211,7 +213,7 @@ code_change(_OldVsn, State, _Extra) ->
                ) ->
   ok.
 terminate(Reason, State) ->
-  io:format( "Terminating application with Reason -> ~p when state was ~p~n"
-           , [Reason, State]
-           ),
+  error_logger:info_msg(
+    "Terminating application with Reason -> ~p when state was ~p~n",
+    [Reason, State]),
   ok.
