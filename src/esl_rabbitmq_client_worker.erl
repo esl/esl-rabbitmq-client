@@ -1,8 +1,6 @@
 -module(esl_rabbitmq_client_worker).
 -behaviour(gen_server).
 
--include_lib("amqp_client/include/amqp_client.hrl").
-
 %% API
 -export([ start_link/0
         , create_exchange/3
@@ -50,10 +48,10 @@ create_exchange(Name, Type, transient) when is_binary(Name),
 create_exchange(Name, Type, Durable) when is_binary(Name),
                                           is_binary(Type),
                                           is_boolean(Durable) ->
-  ExchangeDeclare = #'exchange.declare'{ exchange = Name
-                                       , type = Type
-                                       , durable = Durable
-                                       },
+  {ok, ExchangeDeclare} = esl_rabbitmq_client_amqp:exchange_declare( Name
+                                                                   , Type
+                                                                   , Durable
+                                                                   ),
   gen_server:call(?MODULE, {create_exchange, ExchangeDeclare}).
 
 
@@ -77,7 +75,7 @@ create_queue(Name, transient) when is_binary(Name) ->
   create_queue(Name, false);
 create_queue(Name, Durable) when is_binary(Name),
                                  is_boolean(Durable) ->
-  QueueDeclare = #'queue.declare'{queue = Name , durable = Durable},
+  {ok, QueueDeclare} = esl_rabbitmq_client_amqp:queue_declare(Name, Durable),
   gen_server:call(?MODULE, {create_queue, QueueDeclare}).
 
 
@@ -86,18 +84,20 @@ create_queue(Name, Durable) when is_binary(Name),
 bind_queue(Exchange, Queue, RoutingKey) when is_binary(Exchange),
                                              is_binary(Queue),
                                              is_binary(RoutingKey) ->
-  QueueBind = #'queue.bind'{ exchange = Exchange
-                           , queue = Queue
-                           , routing_key = RoutingKey
-                           },
+  {ok, QueueBind} = esl_rabbitmq_client_amqp:queue_bind( Exchange
+                                                       , Queue
+                                                       , RoutingKey
+                                                       ),
   gen_server:call(?MODULE, {bind_queue, QueueBind}).
 
 
 -spec consume_messages( Queue::binary(), MessageHandler::pid()) ->
   ok.
 consume_messages(Queue, MsgsHandler) when is_binary(Queue) ->
-  QueueSubscription = #'basic.consume'{queue = Queue},
-  gen_server:call(?MODULE, {consume_messages, QueueSubscription, MsgsHandler}).
+  {ok, QueueSubscription} = esl_rabbitmq_client_amqp:basic_consume(Queue),
+  gen_server:call( ?MODULE
+                 , {consume_messages, QueueSubscription, MsgsHandler}
+                 ).
 
 %% =============================================================================
 %% `gen_server' behaviour callbacks
@@ -105,38 +105,7 @@ consume_messages(Queue, MsgsHandler) when is_binary(Queue) ->
 -spec init(Args::term()) ->
   {ok, state()}.
 init(_Args) ->
-  ParamsNetwork =
-    case esl_rabbitmq_client_config:get(uri_spec, undefined) of
-      undefined ->
-        #amqp_params_network
-         { username = esl_rabbitmq_client_config:get(username, <<"guest">>)
-         , password = esl_rabbitmq_client_config:get(password, <<"guest">>)
-         , virtual_host = esl_rabbitmq_client_config:get(virtual_host, <<"/">>)
-         , host = esl_rabbitmq_client_config:get(host, "localhost")
-         , port = esl_rabbitmq_client_config:get(port, undefined)
-         };
-      URI ->
-        {ok, NetworkParams} = amqp_uri:parse(URI),
-        NetworkParams
-    end,
-  AuthMechanismsDefault = [ fun amqp_auth_mechanisms:plain/3
-                          %, fun amqp_auth_mechanisms:amqpplain/3
-                          ],
-  % Read and set custom parameters if any, otherwise use default values
-  AMQPParamsNetwork = ParamsNetwork#amqp_params_network
-    { channel_max = esl_rabbitmq_client_config:get(channel_max, 0)
-    , frame_max = esl_rabbitmq_client_config:get(frame_max, 0)
-    , heartbeat = esl_rabbitmq_client_config:get(heartbeat, 10)
-    , connection_timeout = esl_rabbitmq_client_config:get( connection_timeout
-                                                         , infinity
-                                                         )
-    , ssl_options = esl_rabbitmq_client_config:get(ssl_options, none)
-    , auth_mechanisms = esl_rabbitmq_client_config:get( auth_mechanisms
-                                                      , AuthMechanismsDefault
-                                                      )
-    , client_properties = esl_rabbitmq_client_config:get(client_properties, [])
-    , socket_options = esl_rabbitmq_client_config:get(socket_options, [])
-    },
+  {ok, AMQPParamsNetwork} = esl_rabbitmq_client_amqp:amqp_params_network(),
   {ok, Connection} = amqp_connection:start(AMQPParamsNetwork),
   {ok, Channel} = amqp_connection:open_channel(Connection),
 
@@ -152,28 +121,33 @@ handle_call( {create_exchange, ExchangeDeclare}
            , _From
            , State = #{channel := Channel}
            ) ->
-  #'exchange.declare_ok'{} = amqp_channel:call(Channel, ExchangeDeclare),
+  {ok, ExchangeDeclareOK} = esl_rabbitmq_client_amqp:exchange_declare_ok(),
+  ExchangeDeclareOK = amqp_channel:call(Channel, ExchangeDeclare),
   {reply, ok, State};
 handle_call( {create_queue, QueueDeclare}
            , _From
            , State = #{channel := Channel}
            ) ->
-  #'queue.declare_ok'{queue = Queue} = amqp_channel:call(Channel, QueueDeclare),
+  QueueDeclareResult = amqp_channel:call(Channel, QueueDeclare),
+  {ok, Queue} =
+    esl_rabbitmq_client_amqp:queue_declare_queue_name(QueueDeclareResult),
   {reply, Queue, State};
 handle_call( {bind_queue, QueueBind}
            , _From
            , State = #{channel := Channel}
            ) ->
-  #'queue.bind_ok'{} = amqp_channel:call(Channel, QueueBind),
+  {ok, QueueBindOK} = esl_rabbitmq_client_amqp:queue_bind_ok(),
+  QueueBindOK = amqp_channel:call(Channel, QueueBind),
   {reply, ok, State};
 handle_call( {consume_messages, QueueSubscription, MsgsHandler}
            , _From
            , State = #{channel := Channel}
            ) ->
-  #'basic.consume_ok'{} = amqp_channel:subscribe( Channel
-                                                , QueueSubscription
-                                                , MsgsHandler
-                                                ),
+  {ok, BasicConsumeOK} = esl_rabbitmq_client_amqp:basic_consume_ok(),
+  BasicConsumeOK = amqp_channel:subscribe( Channel
+                                         , QueueSubscription
+                                         , MsgsHandler
+                                         ),
   {reply, ok, State};
 handle_call(Request, From, State) ->
   error_logger:info_msg(
