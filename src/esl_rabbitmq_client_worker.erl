@@ -2,13 +2,21 @@
 -behaviour(gen_server).
 
 %% API
--export([ start_link/0
+-export([start_link/0]).
+-export([ create_exchange/1
+        , create_exchange/2
         , create_exchange/3
-        , create_queue/0
+        , delete_exchange/1
+        ]).
+-export([ create_queue/0
         , create_queue/1
         , create_queue/2
+        , delete_queue/1
         , bind_queue/3
-        , consume_messages/2
+        , unbind_queue/3
+        ]).
+-export([ publish/3
+        , consume/2
         ]).
 %% `gen_server' behaviour callbacks
 -export([ init/1
@@ -33,6 +41,17 @@
 start_link() ->
   gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
+-spec create_exchange(Name::binary()) ->
+  ok.
+create_exchange(Name) when is_binary(Name) ->
+  create_exchange(Name, <<"direct">>, transient).
+
+-spec create_exchange(Name::binary(), Type::binary()) ->
+  ok.
+create_exchange(Name, Type) when is_binary(Name),
+                                 is_binary(Type) ->
+  create_exchange(Name, Type, transient).
+
 
 -spec create_exchange( Name::binary()
                      , Type::binary()
@@ -43,7 +62,7 @@ create_exchange(Name, Type, durable) when is_binary(Name),
                                           is_binary(Type) ->
   create_exchange(Name, Type, true);
 create_exchange(Name, Type, transient) when is_binary(Name),
-                                          is_binary(Type) ->
+                                            is_binary(Type) ->
   create_exchange(Name, Type, false);
 create_exchange(Name, Type, Durable) when is_binary(Name),
                                           is_binary(Type),
@@ -53,6 +72,13 @@ create_exchange(Name, Type, Durable) when is_binary(Name),
                                                                    , Durable
                                                                    ),
   gen_server:call(?MODULE, {create_exchange, ExchangeDeclare}).
+
+
+-spec delete_exchange(Name::binary()) ->
+  ok.
+delete_exchange(Name) when is_binary(Name) ->
+  {ok, ExchangeDelete} = esl_rabbitmq_client_amqp:exchange_delete(Name),
+  gen_server:call(?MODULE, {delete_exchange, ExchangeDelete}).
 
 
 % Create non-durable queue with a random name
@@ -79,25 +105,54 @@ create_queue(Name, Durable) when is_binary(Name),
   gen_server:call(?MODULE, {create_queue, QueueDeclare}).
 
 
--spec bind_queue(Exchange::binary(), Queue::binary(), RoutingKey::binary()) ->
+-spec delete_queue(Name::binary()) ->
+  DeletedMessagesCount::integer().
+delete_queue(Name) when is_binary(Name) ->
+  {ok, QueueDelete} = esl_rabbitmq_client_amqp:queue_delete(Name),
+  gen_server:call(?MODULE, {delete_queue, QueueDelete}).
+
+
+-spec bind_queue(Queue::binary(), Exchange::binary(), RoutingKey::binary()) ->
   ok.
-bind_queue(Exchange, Queue, RoutingKey) when is_binary(Exchange),
-                                             is_binary(Queue),
+bind_queue(Queue, Exchange, RoutingKey) when is_binary(Queue),
+                                             is_binary(Exchange),
                                              is_binary(RoutingKey) ->
-  {ok, QueueBind} = esl_rabbitmq_client_amqp:queue_bind( Exchange
-                                                       , Queue
+  {ok, QueueBind} = esl_rabbitmq_client_amqp:queue_bind( Queue
+                                                       , Exchange
                                                        , RoutingKey
                                                        ),
   gen_server:call(?MODULE, {bind_queue, QueueBind}).
 
 
--spec consume_messages( Queue::binary(), MessageHandler::pid()) ->
+-spec unbind_queue(Queue::binary(), Exchange::binary(), RoutingKey::binary()) ->
   ok.
-consume_messages(Queue, MsgsHandler) when is_binary(Queue) ->
+unbind_queue(Queue, Exchange, RoutingKey) when is_binary(Queue),
+                                             is_binary(Exchange),
+                                             is_binary(RoutingKey) ->
+  {ok, QueueUnbind} = esl_rabbitmq_client_amqp:queue_unbind( Queue
+                                                           , Exchange
+                                                           , RoutingKey
+                                                           ),
+  gen_server:call(?MODULE, {unbind_queue, QueueUnbind}).
+
+
+-spec publish(Exchange::binary(), RoutingKey::binary(), Payload::binary()) ->
+  ok.
+publish(Exchange, RoutingKey, Payload) when is_binary(Exchange),
+                                            is_binary(RoutingKey),
+                                            is_binary(Payload) ->
+  {ok, Publish, Msg} = esl_rabbitmq_client_amqp:basic_publish( Exchange
+                                                             , RoutingKey
+                                                             , Payload
+                                                             ),
+  gen_server:cast(?MODULE, {publish, Publish, Msg}).
+
+
+-spec consume( Queue::binary(), MessageHandler::pid()) ->
+  ok.
+consume(Queue, MsgsHandler) when is_binary(Queue) ->
   {ok, QueueSubscription} = esl_rabbitmq_client_amqp:basic_consume(Queue),
-  gen_server:call( ?MODULE
-                 , {consume_messages, QueueSubscription, MsgsHandler}
-                 ).
+  gen_server:call(?MODULE, {consume, QueueSubscription, MsgsHandler}).
 
 %% =============================================================================
 %% `gen_server' behaviour callbacks
@@ -124,6 +179,13 @@ handle_call( {create_exchange, ExchangeDeclare}
   {ok, ExchangeDeclareOK} = esl_rabbitmq_client_amqp:exchange_declare_ok(),
   ExchangeDeclareOK = amqp_channel:call(Channel, ExchangeDeclare),
   {reply, ok, State};
+handle_call( {delete_exchange, ExchangeDelete}
+           , _From
+           , State = #{channel := Channel}
+           ) ->
+  {ok, ExchangeDeleteOK} = esl_rabbitmq_client_amqp:exchange_delete_ok(),
+  ExchangeDeleteOK = amqp_channel:call(Channel, ExchangeDelete),
+  {reply, ok, State};
 handle_call( {create_queue, QueueDeclare}
            , _From
            , State = #{channel := Channel}
@@ -132,6 +194,14 @@ handle_call( {create_queue, QueueDeclare}
   {ok, Queue} =
     esl_rabbitmq_client_amqp:queue_declare_queue_name(QueueDeclareResult),
   {reply, Queue, State};
+handle_call( {delete_queue, QueueDelete}
+           , _From
+           , State = #{channel := Channel}
+           ) ->
+  QueueDeleteResult = amqp_channel:call(Channel, QueueDelete),
+  {ok, MsgsCount} =
+    esl_rabbitmq_client_amqp:queue_delete_msgs_count(QueueDeleteResult),
+  {reply, MsgsCount, State};
 handle_call( {bind_queue, QueueBind}
            , _From
            , State = #{channel := Channel}
@@ -139,7 +209,14 @@ handle_call( {bind_queue, QueueBind}
   {ok, QueueBindOK} = esl_rabbitmq_client_amqp:queue_bind_ok(),
   QueueBindOK = amqp_channel:call(Channel, QueueBind),
   {reply, ok, State};
-handle_call( {consume_messages, QueueSubscription, MsgsHandler}
+handle_call( {unbind_queue, QueueUnbind}
+           , _From
+           , State = #{channel := Channel}
+           ) ->
+  {ok, QueueUnbindOK} = esl_rabbitmq_client_amqp:queue_unbind_ok(),
+  QueueUnbindOK = amqp_channel:call(Channel, QueueUnbind),
+  {reply, ok, State};
+handle_call( {consume, QueueSubscription, MsgsHandler}
            , _From
            , State = #{channel := Channel}
            ) ->
@@ -166,6 +243,9 @@ handle_info(Info, State) ->
 
 -spec handle_cast(Request::term(), State::state()) ->
   {noreply, state()}.
+handle_cast({publish, Publish, Msg}, State = #{channel := Channel}) ->
+  amqp_channel:cast(Channel, Publish, Msg),
+  {noreply, State};
 handle_cast(Request, State) ->
   error_logger:info_msg(
     "Unknown async request -> ~p when state was ~p~n",

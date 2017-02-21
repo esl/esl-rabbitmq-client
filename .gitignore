@@ -11,4 +11,7 @@ rel/example_project
 .erlang.mk/
 esl_rabbitmq_client.d
 logs/
+log/
 elvis
+MnesiaCore*
+plugins/

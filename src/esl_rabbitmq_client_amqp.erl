@@ -8,15 +8,22 @@
 %% Exchanges
 -export([ exchange_declare/3
         , exchange_declare_ok/0
+        , exchange_delete/1
+        , exchange_delete_ok/0
         ]).
 %% Queue
 -export([ queue_declare/2
         , queue_declare_queue_name/1
+        , queue_delete/1
+        , queue_delete_msgs_count/1
         , queue_bind/3
         , queue_bind_ok/0
+        , queue_unbind/3
+        , queue_unbind_ok/0
         ]).
-%% Consume
--export([ basic_consume/1
+%% Basic
+-export([ basic_publish/3
+        , basic_consume/1
         , basic_consume_ok/0
         ]).
 
@@ -24,10 +31,18 @@
 -type amqp_params_network() :: #amqp_params_network{}.
 -type exchange_declare()    :: #'exchange.declare'{}.
 -type exchange_declare_ok() :: #'exchange.declare_ok'{}.
+-type exchange_delete()     :: #'exchange.delete'{}.
+-type exchange_delete_ok()  :: #'exchange.delete_ok'{}.
 -type queue_declare()       :: #'queue.declare'{}.
 -type queue_declare_ok()    :: #'queue.declare_ok'{}.
+-type queue_delete()        :: #'queue.delete'{}.
+-type queue_delete_ok()     :: #'queue.delete_ok'{}.
 -type queue_bind()          :: #'queue.bind'{}.
 -type queue_bind_ok()       :: #'queue.bind_ok'{}.
+-type queue_unbind()        :: #'queue.unbind'{}.
+-type queue_unbind_ok()     :: #'queue.unbind_ok'{}.
+-type basic_publish()       :: #'basic.publish'{}.
+-type amqp_msg()            :: #amqp_msg{}.
 -type basic_consume()       :: #'basic.consume'{}.
 -type basic_consume_ok()    :: #'basic.consume_ok'{}.
 
@@ -89,14 +104,24 @@ exchange_declare(Name, Type, Durable) ->
 exchange_declare_ok() ->
   {ok, #'exchange.declare_ok'{}}.
 
+
+-spec exchange_delete(Name::binary()) ->
+  {ok, exchange_delete()}.
+exchange_delete(Name) ->
+  {ok, #'exchange.delete'{exchange = Name}}.
+
+-spec exchange_delete_ok() ->
+  {ok, exchange_delete_ok()}.
+exchange_delete_ok() ->
+  {ok, #'exchange.delete_ok'{}}.
+
 %% =============================================================================
 %% Queues
 %% =============================================================================
 -spec queue_declare(Name::binary(), Durable::boolean()) ->
   {ok, queue_declare()}.
 queue_declare(Name, Durable) ->
-  QueueDeclare = #'queue.declare'{queue = Name , durable = Durable},
-  {ok, QueueDeclare}.
+  {ok, #'queue.declare'{queue = Name , durable = Durable}}.
 
 
 -spec queue_declare_queue_name(QueueDeclareResult::queue_declare_ok()) ->
@@ -105,11 +130,23 @@ queue_declare_queue_name(#'queue.declare_ok'{queue = Queue}) ->
   {ok, Queue}.
 
 
--spec queue_bind(Exchange::binary(), Queue::binary(), RoutingKey::binary()) ->
+-spec queue_delete(Name::binary()) ->
+  {ok, queue_delete()}.
+queue_delete(Name) ->
+  {ok, #'queue.delete'{queue = Name}}.
+
+
+-spec queue_delete_msgs_count(QueueDeleteOK::queue_delete_ok()) ->
+  {ok, integer()}.
+queue_delete_msgs_count(#'queue.delete_ok'{message_count = MsgsCount}) ->
+  {ok, MsgsCount}.
+
+
+-spec queue_bind(Queue::binary(), Exchange::binary(), RoutingKey::binary()) ->
   {ok, queue_bind()}.
-queue_bind(Exchange, Queue, RoutingKey) ->
-  QueueBind = #'queue.bind'{ exchange = Exchange
-                           , queue = Queue
+queue_bind(Queue, Exchange, RoutingKey) ->
+  QueueBind = #'queue.bind'{ queue = Queue
+                           , exchange = Exchange
                            , routing_key = RoutingKey
                            },
   {ok, QueueBind}.
@@ -120,9 +157,36 @@ queue_bind(Exchange, Queue, RoutingKey) ->
 queue_bind_ok() ->
   {ok, #'queue.bind_ok'{}}.
 
+
+-spec queue_unbind(Queue::binary(), Exchange::binary(), RoutingKey::binary()) ->
+  {ok, queue_unbind()}.
+queue_unbind(Queue, Exchange, RoutingKey) ->
+  QueueUnbind = #'queue.unbind'{ queue = Queue
+                               , exchange = Exchange
+                               , routing_key = RoutingKey
+                               },
+  {ok, QueueUnbind}.
+
+
+-spec queue_unbind_ok() ->
+  {ok, queue_unbind_ok()}.
+queue_unbind_ok() ->
+  {ok, #'queue.unbind_ok'{}}.
+
 %% =============================================================================
-%% Consume
+%% Basic
 %% =============================================================================
+-spec basic_publish( Exchange::binary()
+                   , RoutingKey::binary()
+                   , Payload::binary()
+                   ) ->
+  {ok, basic_publish(), amqp_msg()}.
+basic_publish(Exchange, RoutingKey, Payload) ->
+  Publish = #'basic.publish'{exchange = Exchange, routing_key = RoutingKey},
+  Msg = #amqp_msg{payload = Payload},
+  {ok, Publish, Msg}.
+
+
 -spec basic_consume(Queue::binary()) ->
   {ok, basic_consume()}.
 basic_consume(Queue) ->
@@ -141,4 +205,4 @@ basic_consume_ok() ->
 -spec consumer_tag() ->
   binary().
 consumer_tag() ->
-  <<"esl-rabbitmq-client-amqp">>.
+  <<"esl-rabbitmq-client-consumer-tag">>.
