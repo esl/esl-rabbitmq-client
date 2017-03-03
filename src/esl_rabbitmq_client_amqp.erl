@@ -14,8 +14,10 @@
 %% Queue
 -export([ queue_declare/2
         , queue_declare_queue_name/1
+        , queue_purge/1
+        , queue_purge_message_count/1
         , queue_delete/1
-        , queue_delete_msgs_count/1
+        , queue_delete_message_count/1
         , queue_bind/3
         , queue_bind_ok/0
         , queue_unbind/3
@@ -24,7 +26,13 @@
 %% Basic
 -export([ basic_publish/3
         , basic_consume/1
-        , basic_consume_ok/0
+        , basic_consume_ok/1
+        , basic_ack/1
+        ]).
+%% Format converters
+-export([ from_basic_consume_ok/1
+        , from_basic_deliver/2
+        , from_basic_cancel/1
         ]).
 
 %% Types definition
@@ -35,6 +43,8 @@
 -type exchange_delete_ok()  :: #'exchange.delete_ok'{}.
 -type queue_declare()       :: #'queue.declare'{}.
 -type queue_declare_ok()    :: #'queue.declare_ok'{}.
+-type queue_purge()         :: #'queue.purge'{}.
+-type queue_purge_ok()      :: #'queue.purge_ok'{}.
 -type queue_delete()        :: #'queue.delete'{}.
 -type queue_delete_ok()     :: #'queue.delete_ok'{}.
 -type queue_bind()          :: #'queue.bind'{}.
@@ -45,6 +55,9 @@
 -type amqp_msg()            :: #amqp_msg{}.
 -type basic_consume()       :: #'basic.consume'{}.
 -type basic_consume_ok()    :: #'basic.consume_ok'{}.
+-type basic_deliver()       :: #'basic.deliver'{}.
+-type basic_cancel()        :: #'basic.cancel'{}.
+-type basic_ack()           :: #'basic.ack'{}.
 
 %% =============================================================================
 %% AMQP params network
@@ -118,10 +131,10 @@ exchange_delete_ok() ->
 %% =============================================================================
 %% Queues
 %% =============================================================================
--spec queue_declare(Name::binary(), Durable::boolean()) ->
+-spec queue_declare(Queue::binary(), Durable::boolean()) ->
   {ok, queue_declare()}.
-queue_declare(Name, Durable) ->
-  {ok, #'queue.declare'{queue = Name , durable = Durable}}.
+queue_declare(Queue, Durable) ->
+  {ok, #'queue.declare'{queue = Queue , durable = Durable}}.
 
 
 -spec queue_declare_queue_name(QueueDeclareResult::queue_declare_ok()) ->
@@ -130,16 +143,28 @@ queue_declare_queue_name(#'queue.declare_ok'{queue = Queue}) ->
   {ok, Queue}.
 
 
--spec queue_delete(Name::binary()) ->
-  {ok, queue_delete()}.
-queue_delete(Name) ->
-  {ok, #'queue.delete'{queue = Name}}.
+-spec queue_purge(Queue::binary()) ->
+  {ok, queue_purge()}.
+queue_purge(Queue) ->
+  {ok, #'queue.purge'{queue = Queue}}.
 
 
--spec queue_delete_msgs_count(QueueDeleteOK::queue_delete_ok()) ->
+-spec queue_purge_message_count(QueuePurgeOK::queue_purge_ok()) ->
   {ok, integer()}.
-queue_delete_msgs_count(#'queue.delete_ok'{message_count = MsgsCount}) ->
-  {ok, MsgsCount}.
+queue_purge_message_count(#'queue.purge_ok'{message_count = MessageCount}) ->
+  {ok, MessageCount}.
+
+
+-spec queue_delete(Queue::binary()) ->
+  {ok, queue_delete()}.
+queue_delete(Queue) ->
+  {ok, #'queue.delete'{queue = Queue}}.
+
+
+-spec queue_delete_message_count(QueueDeleteOK::queue_delete_ok()) ->
+  {ok, integer()}.
+queue_delete_message_count(#'queue.delete_ok'{message_count = MessageCount}) ->
+  {ok, MessageCount}.
 
 
 -spec queue_bind(Queue::binary(), Exchange::binary(), RoutingKey::binary()) ->
@@ -193,11 +218,50 @@ basic_consume(Queue) ->
   {ok, #'basic.consume'{queue = Queue, consumer_tag = consumer_tag()}}.
 
 
--spec basic_consume_ok() ->
+-spec basic_consume_ok(QueueSubscription::basic_consume()) ->
   {ok, basic_consume_ok()}.
-basic_consume_ok() ->
-  {ok, #'basic.consume_ok'{consumer_tag = consumer_tag()}}.
+basic_consume_ok(#'basic.consume'{consumer_tag = CTag}) ->
+  {ok, #'basic.consume_ok'{consumer_tag = CTag}}.
 
+
+-spec basic_ack(DeliveryTag::integer()) ->
+  {ok, basic_ack()}.
+basic_ack(DeliveryTag) ->
+  {ok, #'basic.ack'{delivery_tag = DeliveryTag}}.
+
+%% =============================================================================
+%% Format converters
+%% =============================================================================
+-spec from_basic_consume_ok(BasicConsumeOK::basic_consume_ok()) ->
+  {atom(), proplists:proplist()}.
+from_basic_consume_ok(BasicConsumeOK) ->
+  { 'basic.consume_ok',
+    amqp_primitive_to_list( record_info(fields, 'basic.consume_ok')
+                          , BasicConsumeOK
+                          )
+  }.
+
+
+-spec from_basic_deliver(BasicDeliver::basic_deliver(), AMQPMsg::amqp_msg()) ->
+  {{atom(), proplists:proplist()}, {atom(), proplists:proplist()}}.
+from_basic_deliver(BasicDeliver, AMQPMsg) ->
+  PropsList = amqp_primitive_to_list( record_info(fields, 'P_basic')
+                                    , AMQPMsg#amqp_msg.props
+                                    ),
+  NewAMQPMsg = AMQPMsg#amqp_msg{props = {'P_basic', PropsList}},
+  BasicDeliverList =
+    amqp_primitive_to_list(record_info(fields, 'basic.deliver'), BasicDeliver),
+  AMQPMsgList =
+    amqp_primitive_to_list(record_info(fields, amqp_msg), NewAMQPMsg),
+  {{'basic.deliver', BasicDeliverList}, {amqp_msg, AMQPMsgList}}.
+
+
+-spec from_basic_cancel(BasicCancel::basic_cancel()) ->
+  {atom(), proplists:proplist()}.
+from_basic_cancel(BasicCancel) ->
+  { 'basic.cancel',
+    amqp_primitive_to_list(record_info(fields, 'basic.cancel'), BasicCancel)
+  }.
 
 %% =============================================================================
 %% Private
@@ -205,4 +269,15 @@ basic_consume_ok() ->
 -spec consumer_tag() ->
   binary().
 consumer_tag() ->
-  <<"esl-rabbitmq-client-consumer-tag">>.
+  UniqueIntBin = integer_to_binary(erlang:unique_integer()),
+  <<"esl-rabbitmq-client-consumer-tag", UniqueIntBin/binary>>.
+
+
+-spec amqp_primitive_to_list( AMQPPrimitiveFields::[atom()]
+                            , AMQPPrimitiveData::tuple()
+                            ) ->
+  [{atom(), _}].
+amqp_primitive_to_list(AMQPPrimitiveFields, AMQPPrimitiveData) ->
+  lists:zip( AMQPPrimitiveFields
+           , tl(tuple_to_list(AMQPPrimitiveData))
+           ).

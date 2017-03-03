@@ -11,12 +11,14 @@
 -export([ create_queue/0
         , create_queue/1
         , create_queue/2
+        , purge_queue/1
         , delete_queue/1
         , bind_queue/3
         , unbind_queue/3
         ]).
 -export([ publish/3
         , consume/2
+        , acknowledge_message/1
         ]).
 %% `gen_server' behaviour callbacks
 -export([ init/1
@@ -87,28 +89,35 @@ delete_exchange(Name) when is_binary(Name) ->
 create_queue() ->
   create_queue(<<>>, false).
 
--spec create_queue(Name::binary()) ->
+-spec create_queue(Queue::binary()) ->
   binary().
-create_queue(Name) when is_binary(Name) ->
-  create_queue(Name, false).
+create_queue(Queue) when is_binary(Queue) ->
+  create_queue(Queue, false).
 
 
--spec create_queue(Name::binary(), Durable::durable | transient | boolean()) ->
+-spec create_queue(Queue::binary(), Durable::durable | transient | boolean()) ->
   binary().
-create_queue(Name, durable) when is_binary(Name) ->
-  create_queue(Name, true);
-create_queue(Name, transient) when is_binary(Name) ->
-  create_queue(Name, false);
-create_queue(Name, Durable) when is_binary(Name),
+create_queue(Queue, durable) when is_binary(Queue) ->
+  create_queue(Queue, true);
+create_queue(Queue, transient) when is_binary(Queue) ->
+  create_queue(Queue, false);
+create_queue(Queue, Durable) when is_binary(Queue),
                                  is_boolean(Durable) ->
-  {ok, QueueDeclare} = esl_rabbitmq_client_amqp:queue_declare(Name, Durable),
+  {ok, QueueDeclare} = esl_rabbitmq_client_amqp:queue_declare(Queue, Durable),
   gen_server:call(?MODULE, {create_queue, QueueDeclare}).
 
 
--spec delete_queue(Name::binary()) ->
-  DeletedMessagesCount::integer().
-delete_queue(Name) when is_binary(Name) ->
-  {ok, QueueDelete} = esl_rabbitmq_client_amqp:queue_delete(Name),
+-spec purge_queue(Queue::binary()) ->
+  MessageCount::integer().
+purge_queue(Queue) when is_binary(Queue) ->
+  {ok, QueuePurge} = esl_rabbitmq_client_amqp:queue_purge(Queue),
+  gen_server:call(?MODULE, {purge_queue, QueuePurge}).
+
+
+-spec delete_queue(Queue::binary()) ->
+  MessageCount::integer().
+delete_queue(Queue) when is_binary(Queue) ->
+  {ok, QueueDelete} = esl_rabbitmq_client_amqp:queue_delete(Queue),
   gen_server:call(?MODULE, {delete_queue, QueueDelete}).
 
 
@@ -148,11 +157,18 @@ publish(Exchange, RoutingKey, Payload) when is_binary(Exchange),
   gen_server:cast(?MODULE, {publish, Publish, Msg}).
 
 
--spec consume( Queue::binary(), MessageHandler::pid()) ->
+-spec consume( Queue::binary(), MessagesHandlerPid::pid()) ->
   ok.
-consume(Queue, MsgsHandler) when is_binary(Queue) ->
+consume(Queue, MessagesHandlerPid) when is_binary(Queue) ->
   {ok, QueueSubscription} = esl_rabbitmq_client_amqp:basic_consume(Queue),
-  gen_server:call(?MODULE, {consume, QueueSubscription, MsgsHandler}).
+  gen_server:call(?MODULE, {consume, QueueSubscription, MessagesHandlerPid}).
+
+
+-spec acknowledge_message(DeliveryTag::integer()) ->
+  ok.
+acknowledge_message(DeliveryTag) ->
+  {ok, BasicAck} = esl_rabbitmq_client_amqp:basic_ack(DeliveryTag),
+  gen_server:cast(?MODULE, {acknowledge_message, BasicAck}).
 
 %% =============================================================================
 %% `gen_server' behaviour callbacks
@@ -163,6 +179,7 @@ init(_Args) ->
   {ok, AMQPParamsNetwork} = esl_rabbitmq_client_amqp:amqp_params_network(),
   {ok, Connection} = amqp_connection:start(AMQPParamsNetwork),
   {ok, Channel} = amqp_connection:open_channel(Connection),
+  {ok, _MsgsHandlerSupPid} = esl_rabbitmq_client_msg_handler_sup:start_link(),
 
   {ok, #{connection => Connection, channel => Channel}}.
 
@@ -190,18 +207,26 @@ handle_call( {create_queue, QueueDeclare}
            , _From
            , State = #{channel := Channel}
            ) ->
-  QueueDeclareResult = amqp_channel:call(Channel, QueueDeclare),
+  QueueDeclareOK = amqp_channel:call(Channel, QueueDeclare),
   {ok, Queue} =
-    esl_rabbitmq_client_amqp:queue_declare_queue_name(QueueDeclareResult),
+    esl_rabbitmq_client_amqp:queue_declare_queue_name(QueueDeclareOK),
   {reply, Queue, State};
+handle_call( {purge_queue, QueuePurge}
+           , _From
+           , State = #{channel := Channel}
+           ) ->
+  QueuePurgeOK = amqp_channel:call(Channel, QueuePurge),
+  {ok, MessageCount} =
+    esl_rabbitmq_client_amqp:queue_purge_message_count(QueuePurgeOK),
+  {reply, MessageCount, State};
 handle_call( {delete_queue, QueueDelete}
            , _From
            , State = #{channel := Channel}
            ) ->
-  QueueDeleteResult = amqp_channel:call(Channel, QueueDelete),
-  {ok, MsgsCount} =
-    esl_rabbitmq_client_amqp:queue_delete_msgs_count(QueueDeleteResult),
-  {reply, MsgsCount, State};
+  QueueDeleteOK = amqp_channel:call(Channel, QueueDelete),
+  {ok, MessageCount} =
+    esl_rabbitmq_client_amqp:queue_delete_message_count(QueueDeleteOK),
+  {reply, MessageCount, State};
 handle_call( {bind_queue, QueueBind}
            , _From
            , State = #{channel := Channel}
@@ -216,14 +241,17 @@ handle_call( {unbind_queue, QueueUnbind}
   {ok, QueueUnbindOK} = esl_rabbitmq_client_amqp:queue_unbind_ok(),
   QueueUnbindOK = amqp_channel:call(Channel, QueueUnbind),
   {reply, ok, State};
-handle_call( {consume, QueueSubscription, MsgsHandler}
+handle_call( {consume, QueueSubscription, MsgsHandlerPid}
            , _From
            , State = #{channel := Channel}
            ) ->
-  {ok, BasicConsumeOK} = esl_rabbitmq_client_amqp:basic_consume_ok(),
+  {ok, BasicConsumeOK} =
+    esl_rabbitmq_client_amqp:basic_consume_ok(QueueSubscription),
+  {ok, MsgsHandlerWorkerPid} =
+    esl_rabbitmq_client_msg_handler_sup:start_child(MsgsHandlerPid),
   BasicConsumeOK = amqp_channel:subscribe( Channel
                                          , QueueSubscription
-                                         , MsgsHandler
+                                         , MsgsHandlerWorkerPid
                                          ),
   {reply, ok, State};
 handle_call(Request, From, State) ->
@@ -245,6 +273,9 @@ handle_info(Info, State) ->
   {noreply, state()}.
 handle_cast({publish, Publish, Msg}, State = #{channel := Channel}) ->
   amqp_channel:cast(Channel, Publish, Msg),
+  {noreply, State};
+handle_cast({acknowledge_message, BasicAck}, State = #{channel := Channel}) ->
+  amqp_channel:cast(Channel, BasicAck),
   {noreply, State};
 handle_cast(Request, State) ->
   error_logger:info_msg(

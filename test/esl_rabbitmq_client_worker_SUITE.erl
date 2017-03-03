@@ -11,7 +11,7 @@
         ]).
 %% Tests
 -export([ create_and_delete_exchange/1
-        , create_and_delete_queue/1
+        , create_delete_and_purge_queue/1
         , bind_and_unbind_queue/1
         , publish/1
         , consume/1
@@ -27,7 +27,7 @@
   [atom()].
 all() ->
   [ create_and_delete_exchange
-  , create_and_delete_queue
+  , create_delete_and_purge_queue
   , bind_and_unbind_queue
   , publish
   , consume
@@ -48,12 +48,18 @@ init_per_suite(Config) ->
                                      ),
   application:set_env(esl_rabbitmq_client, port, 21000),
   {ok, _} = application:ensure_all_started(esl_rabbitmq_client),
+
+  % Make sure testing objects are clean before starting tests
+  _ = esl_rabbitmq_client_worker:delete_queue(test_queue()),
+  esl_rabbitmq_client_worker:delete_exchange(test_exchange()),
+
   Config2.
 
 
 -spec end_per_suite(Config::config()) ->
   config().
 end_per_suite(Config) ->
+  ok = application:stop(esl_rabbitmq_client),
   rabbit_ct_helpers:run_teardown_steps(
     Config, rabbit_ct_broker_helpers:teardown_steps()).
 
@@ -121,9 +127,9 @@ create_and_delete_exchange(Config) ->
   {comment, ""}.
 
 
--spec create_and_delete_queue(Config::config()) ->
+-spec create_delete_and_purge_queue(Config::config()) ->
   {comment, string()}.
-create_and_delete_queue(Config) ->
+create_delete_and_purge_queue(Config) ->
   ct:comment("Create non-durable queue with random name"),
   RandomQueue = esl_rabbitmq_client_worker:create_queue(),
   true = queue_exist(Config, RandomQueue),
@@ -156,6 +162,20 @@ create_and_delete_queue(Config) ->
   ct:comment("Delete durable queue with given name"),
   0 = esl_rabbitmq_client_worker:delete_queue(TestQueue),
   false = queue_exist(Config, TestQueue),
+
+  ct:comment("Create queue to purge"),
+  PurgeQueue = esl_rabbitmq_client_worker:create_queue(),
+  true = queue_exist(Config, PurgeQueue),
+
+  ct:comment("Fill queue with messages"),
+  send_testing_data(<<>>, PurgeQueue),
+
+  ct:comment("Purge queue"),
+  TestMsgsCount = how_many_messages(),
+  TestMsgsCount = esl_rabbitmq_client_worker:purge_queue(PurgeQueue),
+
+  ct:comment("Clean up"),
+  0 = esl_rabbitmq_client_worker:delete_queue(PurgeQueue),
 
   {comment, ""}.
 
@@ -228,33 +248,33 @@ consume(_Config) ->
   Exchange = test_exchange(),
   Queue = test_queue(),
   RoutingKey = test_routing_key(),
+  TestMsgsCount = how_many_messages(),
 
   ct:comment("Create exchange and queue and bind them"),
   esl_rabbitmq_client_worker:create_exchange(Exchange, <<"direct">>),
   Queue = esl_rabbitmq_client_worker:create_queue(Queue),
   esl_rabbitmq_client_worker:bind_queue(Queue, Exchange, RoutingKey),
 
-  ct:comment("Send 100 test messages"),
+  ct:comment("Send test messages"),
   send_testing_data(Exchange, RoutingKey),
 
-  ct:comment("Check there are 100 messages when deleting the queue"),
-  100 = esl_rabbitmq_client_worker:delete_queue(Queue),
+  ct:comment("Check there are messages when deleting the queue"),
+  TestMsgsCount = esl_rabbitmq_client_worker:delete_queue(Queue),
 
   ct:comment("Recreate queue and bind it again to the exchange"),
   Queue = esl_rabbitmq_client_worker:create_queue(Queue),
   esl_rabbitmq_client_worker:bind_queue(Queue, Exchange, RoutingKey),
 
-  ct:comment("Send 100 test messages again"),
-  send_testing_data(Exchange, RoutingKey),
-
   ct:comment("Spawn messages handler function - will be used as a drainer"),
   MsgsHandler = spawn(fun basic_consume/0),
+
+  ct:comment("Send test messages"),
+  send_testing_data(Exchange, RoutingKey),
 
   ct:comment("Start consuming messages from queue"),
   esl_rabbitmq_client_worker:consume(Queue, MsgsHandler),
 
-
-  % Since all the messages were drained from the queue by our consumer, there
+  % Since all the messages were consumed and acknowledged, there
   % should be 0 messages left in the queue when the queue is deleted.
   0 = esl_rabbitmq_client_worker:delete_queue(Queue),
 
@@ -365,15 +385,29 @@ send_testing_data(Exchange, RoutingKey) ->
                                                     , MsgBin
                                                     )
                 end,
-                lists:seq(1, 100)),
+                lists:seq(1, how_many_messages())),
   ok.
 
 
 -spec basic_consume() ->
-  [binary()].
+  ok.
 basic_consume() ->
   receive
-    X ->
-      ct:pal("Got *~p* message~n", [X]),
+    {'basic.consume_ok', _Message} ->
+      ct:pal("Waiting for messages...", []),
+      basic_consume();
+    {'basic.cancel', _Message} ->
+      ct:pal("Ok, bye", []);
+    { {'basic.deliver', BasicDeliver}, {amqp_msg, AMQPMsg} } ->
+      DTag = proplists:get_value(delivery_tag, BasicDeliver),
+      Payload = proplists:get_value(payload, AMQPMsg),
+      ct:pal("Payload -> ~p", [Payload]),
+      esl_rabbitmq_client_worker:acknowledge_message(DTag),
       basic_consume()
   end.
+
+
+-spec how_many_messages() ->
+  integer().
+how_many_messages() ->
+  100.
