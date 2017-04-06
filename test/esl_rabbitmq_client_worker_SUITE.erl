@@ -15,6 +15,7 @@
         , bind_and_unbind_queue/1
         , publish/1
         , consume/1
+        , persistent_messages/1
         ]).
 
 -type config()   :: term().
@@ -31,6 +32,7 @@ all() ->
   , bind_and_unbind_queue
   , publish
   , consume
+  , persistent_messages
   ].
 
 
@@ -124,6 +126,17 @@ create_and_delete_exchange(Config) ->
   esl_rabbitmq_client_worker:delete_exchange(Exchange),
   false = exchange_exist(Config, Exchange),
 
+  ct:comment("Create exchange by sending the parameters as a proplist"),
+  esl_rabbitmq_client_worker:create_exchange([ {exchange, Exchange}
+                                             , {type, <<"direct">>}
+                                             , {auto_delete, true}
+                                             ]),
+  true = exchange_exist(Config, Exchange),
+
+  ct:comment("Delete exchange created by sending parameters as a proplist"),
+  esl_rabbitmq_client_worker:delete_exchange(Exchange),
+  false = exchange_exist(Config, Exchange),
+
   {comment, ""}.
 
 
@@ -173,6 +186,12 @@ create_delete_and_purge_queue(Config) ->
   ct:comment("Purge queue"),
   TestMsgsCount = how_many_messages(),
   TestMsgsCount = esl_rabbitmq_client_worker:purge_queue(PurgeQueue),
+
+  ct:comment("Create queue by sending parameters as a proplist"),
+  QueueFromPlist = esl_rabbitmq_client_worker:create_queue([ {auto_delete, true}
+                                                           , {exclusive, true}
+                                                           ]),
+  true = queue_exist(Config, QueueFromPlist),
 
   ct:comment("Clean up"),
   0 = esl_rabbitmq_client_worker:delete_queue(PurgeQueue),
@@ -274,9 +293,33 @@ consume(_Config) ->
   ct:comment("Start consuming messages from queue"),
   esl_rabbitmq_client_worker:consume(Queue, MsgsHandler),
 
+  % Give the consumer a couple of seconds to drain the queue.
+  timer:sleep(3000),
+
   % Since all the messages were consumed and acknowledged, there
   % should be 0 messages left in the queue when the queue is deleted.
   0 = esl_rabbitmq_client_worker:delete_queue(Queue),
+
+  {comment, ""}.
+
+
+-spec persistent_messages(Config::config()) ->
+  {comment, string()}.
+persistent_messages(_Config) ->
+
+  ct:comment("Create durable queue"),
+  Queue = esl_rabbitmq_client_worker:create_queue([ {durable, true} ]),
+
+  ct:comment("Publish persistent message"),
+  esl_rabbitmq_client_worker:publish(<<>>, Queue, <<"my message">>, true),
+
+  ct:comment("Consume persistent message"),
+  esl_rabbitmq_client_worker:consume(Queue, self()),
+
+  receive
+    { {'basic.deliver', _} , {amqp_msg, [{props, {'P_basic', Props}}, _]} } ->
+      2 = proplists:get_value(delivery_mode, Props)
+  end,
 
   {comment, ""}.
 

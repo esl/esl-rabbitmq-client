@@ -6,13 +6,13 @@
 -export([ amqp_params_network/0
         ]).
 %% Exchanges
--export([ exchange_declare/3
+-export([ exchange_declare/1
         , exchange_declare_ok/0
         , exchange_delete/1
         , exchange_delete_ok/0
         ]).
 %% Queue
--export([ queue_declare/2
+-export([ queue_declare/1
         , queue_declare_queue_name/1
         , queue_purge/1
         , queue_purge_message_count/1
@@ -102,14 +102,18 @@ amqp_params_network() ->
 %% =============================================================================
 %% Exchanges
 %% =============================================================================
--spec exchange_declare(Name::binary(), Type::binary(), Durable::boolean()) ->
+-spec exchange_declare(ExchangeParams::proplists:proplist()) ->
   {ok, exchange_declare()}.
-exchange_declare(Name, Type, Durable) ->
-  ExchangeDeclare = #'exchange.declare'{ exchange = Name
-                                       , type = Type
-                                       , durable = Durable
-                                       },
-  {ok, ExchangeDeclare}.
+exchange_declare(ExchangeParams) ->
+  RecordFields = record_info(fields, 'exchange.declare'),
+  % Exchange declaration with default values
+  ExchangeDeclareList = primitive_to_list(RecordFields, #'exchange.declare'{}),
+  % Set user defined parameters
+  ExchangeDeclare = primitive_declare(ExchangeDeclareList, ExchangeParams),
+  % Convert proplist back to primitive
+  Values = [proplists:get_value(Key, ExchangeDeclare) || Key <- RecordFields],
+  Exchange = list_to_tuple(['exchange.declare' | Values]),
+  {ok, Exchange}.
 
 
 -spec exchange_declare_ok() ->
@@ -131,10 +135,18 @@ exchange_delete_ok() ->
 %% =============================================================================
 %% Queues
 %% =============================================================================
--spec queue_declare(Queue::binary(), Durable::boolean()) ->
+-spec queue_declare(QueueParams::proplists:proplist()) ->
   {ok, queue_declare()}.
-queue_declare(Queue, Durable) ->
-  {ok, #'queue.declare'{queue = Queue , durable = Durable}}.
+queue_declare(QueueParams) ->
+  PrimitiveFields = record_info(fields, 'queue.declare'),
+  % Queue declaration with default values
+  QueueDeclareList = primitive_to_list(PrimitiveFields, #'queue.declare'{}),
+  % Set user defined parameters
+  QueueDeclare = primitive_declare(QueueDeclareList, QueueParams),
+  % Convert proplist back to primitive
+  Values = [proplists:get_value(K, QueueDeclare) || K <- PrimitiveFields],
+  Queue = list_to_tuple(['queue.declare' | Values]),
+  {ok, Queue}.
 
 
 -spec queue_declare_queue_name(QueueDeclareResult::queue_declare_ok()) ->
@@ -201,14 +213,36 @@ queue_unbind_ok() ->
 %% =============================================================================
 %% Basic
 %% =============================================================================
--spec basic_publish( Exchange::binary()
-                   , RoutingKey::binary()
-                   , Payload::binary()
+-spec basic_publish( PublishParams::proplists:prolist()
+                   , Payload::term()
+                   , MsgPropsParams::proplists:proplist()
                    ) ->
   {ok, basic_publish(), amqp_msg()}.
-basic_publish(Exchange, RoutingKey, Payload) ->
-  Publish = #'basic.publish'{exchange = Exchange, routing_key = RoutingKey},
-  Msg = #amqp_msg{payload = Payload},
+basic_publish(PublishParams, Payload, MsgPropsParams) ->
+  % === basic.publish ===
+  PublishFields = record_info(fields, 'basic.publish'),
+  % basic.publish default values
+  PublishDeclareList = primitive_to_list(PublishFields, #'basic.publish'{}),
+  % Set user defined parameters
+  PublishDeclare = primitive_declare(PublishDeclareList, PublishParams),
+  % Convert proplist back to primitive
+  PublishValues =
+    [proplists:get_value(K, PublishDeclare) || K <- PublishFields],
+  Publish = list_to_tuple(['basic.publish' | PublishValues]),
+
+  % === P_basic ===
+  PBasicFields = record_info(fields, 'P_basic'),
+  % P_basic default values
+  PBasicDeclareList = primitive_to_list(PBasicFields, #'P_basic'{}),
+  % Set user defined parameters
+  PBasicDeclare = primitive_declare(PBasicDeclareList, MsgPropsParams),
+  % Convert proplist back to primitive
+  PBasicValues = [proplists:get_value(K, PBasicDeclare) || K <- PBasicFields],
+  PBasic = list_to_tuple(['P_basic' | PBasicValues]),
+
+  % === amqp_msg ===
+  Msg = #amqp_msg{payload = Payload, props = PBasic},
+
   {ok, Publish, Msg}.
 
 
@@ -235,24 +269,22 @@ basic_ack(DeliveryTag) ->
 -spec from_basic_consume_ok(BasicConsumeOK::basic_consume_ok()) ->
   {atom(), proplists:proplist()}.
 from_basic_consume_ok(BasicConsumeOK) ->
-  { 'basic.consume_ok',
-    amqp_primitive_to_list( record_info(fields, 'basic.consume_ok')
-                          , BasicConsumeOK
-                          )
+  { 'basic.consume_ok'
+  , primitive_to_list(record_info(fields, 'basic.consume_ok'), BasicConsumeOK)
   }.
 
 
 -spec from_basic_deliver(BasicDeliver::basic_deliver(), AMQPMsg::amqp_msg()) ->
   {{atom(), proplists:proplist()}, {atom(), proplists:proplist()}}.
 from_basic_deliver(BasicDeliver, AMQPMsg) ->
-  PropsList = amqp_primitive_to_list( record_info(fields, 'P_basic')
-                                    , AMQPMsg#amqp_msg.props
-                                    ),
+  PropsList = primitive_to_list( record_info(fields, 'P_basic')
+                               , AMQPMsg#amqp_msg.props
+                               ),
   NewAMQPMsg = AMQPMsg#amqp_msg{props = {'P_basic', PropsList}},
-  BasicDeliverList =
-    amqp_primitive_to_list(record_info(fields, 'basic.deliver'), BasicDeliver),
-  AMQPMsgList =
-    amqp_primitive_to_list(record_info(fields, amqp_msg), NewAMQPMsg),
+  BasicDeliverList = primitive_to_list( record_info(fields, 'basic.deliver')
+                                      , BasicDeliver
+                                      ),
+  AMQPMsgList = primitive_to_list(record_info(fields, amqp_msg), NewAMQPMsg),
   {{'basic.deliver', BasicDeliverList}, {amqp_msg, AMQPMsgList}}.
 
 
@@ -260,7 +292,7 @@ from_basic_deliver(BasicDeliver, AMQPMsg) ->
   {atom(), proplists:proplist()}.
 from_basic_cancel(BasicCancel) ->
   { 'basic.cancel',
-    amqp_primitive_to_list(record_info(fields, 'basic.cancel'), BasicCancel)
+    primitive_to_list(record_info(fields, 'basic.cancel'), BasicCancel)
   }.
 
 %% =============================================================================
@@ -273,11 +305,22 @@ consumer_tag() ->
   <<"esl-rabbitmq-client-consumer-tag", UniqueIntBin/binary>>.
 
 
--spec amqp_primitive_to_list( AMQPPrimitiveFields::[atom()]
-                            , AMQPPrimitiveData::tuple()
-                            ) ->
+-spec primitive_to_list(PrimitiveFields::[atom()], PrimitiveData::tuple()) ->
   [{atom(), _}].
-amqp_primitive_to_list(AMQPPrimitiveFields, AMQPPrimitiveData) ->
-  lists:zip( AMQPPrimitiveFields
-           , tl(tuple_to_list(AMQPPrimitiveData))
-           ).
+primitive_to_list(PrimitiveFields, PrimitiveData) ->
+  lists:zip(PrimitiveFields, tl(tuple_to_list(PrimitiveData))).
+
+%% Iterate through each user defined parameter and use it for the declare
+%% operation instead of the default values.
+-spec primitive_declare( PrimitiveDeclareList::proplists:proplist()
+                       , UserParams::proplists:proplist()
+                       ) ->
+  proplists:proplist().
+primitive_declare(PrimitiveDeclareList, UserParams) ->
+  lists:foldl(
+    fun(Param = {Key, _Value}, TmpPrimitiveDeclare) ->
+      lists:keyreplace(Key, 1, TmpPrimitiveDeclare, Param)
+    end
+  , PrimitiveDeclareList
+  , UserParams
+  ).

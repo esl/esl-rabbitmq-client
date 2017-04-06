@@ -17,6 +17,7 @@
         , unbind_queue/3
         ]).
 -export([ publish/3
+        , publish/4
         , consume/2
         , acknowledge_message/1
         ]).
@@ -43,37 +44,53 @@
 start_link() ->
   gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
--spec create_exchange(Name::binary()) ->
+%% First spec is for the cases the user wants to use parameters not supported
+%% by create_exchange/[1, 2, 3] implementation (API). i.e:
+%%
+%%    create_exchange([ {exchange, <<"myexch">>}
+%%                    , {auto_delete, true}
+%%                    , {nowait, true}
+%%                    ]).
+%% ---
+%% The second one is for the cases the user just wants to set the name and use
+%% the default values for the rest of the parameters. i.e:
+%%
+%%    create_exchange(<<"myexch">>).
+%% ---
+-spec create_exchange(ExchangeParams::proplists:proplist()) -> ok;
+                     (Name::binary()) -> ok.
+create_exchange(ExchangeParams) when is_list(ExchangeParams) ->
+  {ok, ExchangeDeclare} =
+    esl_rabbitmq_client_amqp:exchange_declare(ExchangeParams),
+  gen_server:call(?MODULE, {create_exchange, ExchangeDeclare});
+create_exchange(Exchange) when is_binary(Exchange) ->
+  create_exchange(Exchange, <<"direct">>, transient).
+
+-spec create_exchange(Exchange::binary(), Type::binary()) ->
   ok.
-create_exchange(Name) when is_binary(Name) ->
-  create_exchange(Name, <<"direct">>, transient).
-
--spec create_exchange(Name::binary(), Type::binary()) ->
-  ok.
-create_exchange(Name, Type) when is_binary(Name),
-                                 is_binary(Type) ->
-  create_exchange(Name, Type, transient).
+create_exchange(Exchange, Type) when is_binary(Exchange),
+                                     is_binary(Type) ->
+  create_exchange(Exchange, Type, transient).
 
 
--spec create_exchange( Name::binary()
+-spec create_exchange( Exchange::binary()
                      , Type::binary()
                      , Durable::durable | transient | boolean()
                      ) ->
   ok.
-create_exchange(Name, Type, durable) when is_binary(Name),
-                                          is_binary(Type) ->
-  create_exchange(Name, Type, true);
-create_exchange(Name, Type, transient) when is_binary(Name),
-                                            is_binary(Type) ->
-  create_exchange(Name, Type, false);
-create_exchange(Name, Type, Durable) when is_binary(Name),
-                                          is_binary(Type),
-                                          is_boolean(Durable) ->
-  {ok, ExchangeDeclare} = esl_rabbitmq_client_amqp:exchange_declare( Name
-                                                                   , Type
-                                                                   , Durable
-                                                                   ),
-  gen_server:call(?MODULE, {create_exchange, ExchangeDeclare}).
+create_exchange(Exchange, Type, durable) when is_binary(Exchange),
+                                              is_binary(Type) ->
+  create_exchange(Exchange, Type, true);
+create_exchange(Exchange, Type, transient) when is_binary(Exchange),
+                                                is_binary(Type) ->
+  create_exchange(Exchange, Type, false);
+create_exchange(Exchange, Type, Durable) when is_binary(Exchange),
+                                              is_binary(Type),
+                                              is_boolean(Durable) ->
+  create_exchange([ {exchange, Exchange}
+                  , {type, Type}
+                  , {durable, Durable}
+                  ]).
 
 
 -spec delete_exchange(Name::binary()) ->
@@ -83,16 +100,33 @@ delete_exchange(Name) when is_binary(Name) ->
   gen_server:call(?MODULE, {delete_exchange, ExchangeDelete}).
 
 
-% Create non-durable queue with a random name
+%% Create non-durable queue with a random name
 -spec create_queue() ->
   binary().
 create_queue() ->
   create_queue(<<>>, false).
 
--spec create_queue(Queue::binary()) ->
-  binary().
+
+%% First spec is for the cases the user wants to use parameters not supported
+%% by create_queue/[0, 1, 2] implementation (API). i.e:
+%%
+%%    create_queue([ {queue, <<"myexch">>}
+%%                 , {auto_delete, true}
+%%                 , {durable, true}
+%%                 ]).
+%% ---
+%% The second one is for the cases the user just wants to set the name and use
+%% the default values for the rest of the parameters. i.e:
+%%
+%%    create_queue(<<"my-queue">>).
+%% ---
+-spec create_queue(Queue::binary()) -> binary();
+                  (QueueParams::proplists:proplist()) -> binary().
 create_queue(Queue) when is_binary(Queue) ->
-  create_queue(Queue, false).
+  create_queue(Queue, false);
+create_queue(QueueParams) when is_list(QueueParams) ->
+  {ok, QueueDeclare} = esl_rabbitmq_client_amqp:queue_declare(QueueParams),
+  gen_server:call(?MODULE, {create_queue, QueueDeclare}).
 
 
 -spec create_queue(Queue::binary(), Durable::durable | transient | boolean()) ->
@@ -103,8 +137,7 @@ create_queue(Queue, transient) when is_binary(Queue) ->
   create_queue(Queue, false);
 create_queue(Queue, Durable) when is_binary(Queue),
                                  is_boolean(Durable) ->
-  {ok, QueueDeclare} = esl_rabbitmq_client_amqp:queue_declare(Queue, Durable),
-  gen_server:call(?MODULE, {create_queue, QueueDeclare}).
+  create_queue([{queue, Queue}, {durable, Durable}]).
 
 
 -spec purge_queue(Queue::binary()) ->
@@ -145,16 +178,45 @@ unbind_queue(Queue, Exchange, RoutingKey) when is_binary(Queue),
   gen_server:call(?MODULE, {unbind_queue, QueueUnbind}).
 
 
--spec publish(Exchange::binary(), RoutingKey::binary(), Payload::binary()) ->
+-spec publish({ PublishParams::proplists:proplist()
+              , Payload::term()
+              , MsgPropsParams::proplists:proplist()
+              }) ->
   ok.
-publish(Exchange, RoutingKey, Payload) when is_binary(Exchange),
-                                            is_binary(RoutingKey),
-                                            is_binary(Payload) ->
-  {ok, Publish, Msg} = esl_rabbitmq_client_amqp:basic_publish( Exchange
-                                                             , RoutingKey
+publish({PublishParams, Payload, MsgPropsParams}) ->
+  {ok, Publish, Msg} = esl_rabbitmq_client_amqp:basic_publish( PublishParams
                                                              , Payload
+                                                             , MsgPropsParams
                                                              ),
   gen_server:cast(?MODULE, {publish, Publish, Msg}).
+
+
+-spec publish(Exchange::binary(), RoutingKey::binary(), Payload::term()) ->
+  ok.
+publish(Exchange, RoutingKey, Payload) when is_binary(Exchange),
+                                            is_binary(RoutingKey) ->
+  publish(Exchange, RoutingKey, Payload, false).
+
+
+-spec publish( Exchange::binary()
+             , RoutingKey::binary()
+             , Payload::term()
+             , Persistent::boolean() | 1 | 2
+             ) ->
+  ok.
+publish(Exchange, RoutingKey, Payload, false) when is_binary(Exchange),
+                                                       is_binary(RoutingKey) ->
+  publish(Exchange, RoutingKey, Payload, 1);
+publish(Exchange, RoutingKey, Payload, true) when is_binary(Exchange),
+                                                     is_binary(RoutingKey) ->
+  publish(Exchange, RoutingKey, Payload, 2);
+publish(Exchange, RoutingKey, Payload, DMode) when is_binary(Exchange),
+                                                   is_binary(RoutingKey),
+                                                   is_number(DMode) ->
+  publish({ [ {exchange, Exchange} , {routing_key, RoutingKey} ] % basic.publish
+          , Payload
+          , [ {delivery_mode, DMode} ] % P_basic
+          }).
 
 
 -spec consume( Queue::binary(), MessagesHandlerPid::pid()) ->
@@ -297,7 +359,9 @@ code_change(_OldVsn, State, _Extra) ->
                , State::state()
                ) ->
   ok.
-terminate(Reason, State) ->
+terminate(Reason, State = #{channel := _Channel, connection := Connection}) ->
+  % Clean up
+  amqp_connection:close(Connection),
   error_logger:info_msg(
     "Terminating application with Reason -> ~p when state was ~p~n",
     [Reason, State]),
