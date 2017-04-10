@@ -28,6 +28,8 @@
         , basic_consume/1
         , basic_consume_ok/1
         , basic_ack/1
+        , basic_qos/1
+        , basic_qos_ok/0
         ]).
 %% Format converters
 -export([ from_basic_consume_ok/1
@@ -58,6 +60,8 @@
 -type basic_deliver()       :: #'basic.deliver'{}.
 -type basic_cancel()        :: #'basic.cancel'{}.
 -type basic_ack()           :: #'basic.ack'{}.
+-type basic_qos()           :: #'basic.qos'{}.
+-type basic_qos_ok()        :: #'basic.qos_ok'{}.
 
 %% =============================================================================
 %% AMQP params network
@@ -262,6 +266,18 @@ basic_consume_ok(#'basic.consume'{consumer_tag = CTag}) ->
   {ok, basic_ack()}.
 basic_ack(DeliveryTag) ->
   {ok, #'basic.ack'{delivery_tag = DeliveryTag}}.
+
+
+-spec basic_qos(Count::integer()) ->
+  {ok, basic_qos()}.
+basic_qos(Count) ->
+  {ok, #'basic.qos'{prefetch_count = Count}}.
+
+
+-spec basic_qos_ok() ->
+  {ok, basic_qos_ok()}.
+basic_qos_ok() ->
+  {ok, #'basic.qos_ok'{}}.
 
 %% =============================================================================
 %% Format converters

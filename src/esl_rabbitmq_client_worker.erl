@@ -20,6 +20,7 @@
         , publish/4
         , consume/2
         , acknowledge_message/1
+        , set_prefetch_count/1
         ]).
 %% `gen_server' behaviour callbacks
 -export([ init/1
@@ -219,18 +220,26 @@ publish(Exchange, RoutingKey, Payload, DMode) when is_binary(Exchange),
           }).
 
 
--spec consume( Queue::binary(), MessagesHandlerPid::pid()) ->
+-spec consume(Queue::binary(), MessagesHandlerPid::pid()) ->
   ok.
-consume(Queue, MessagesHandlerPid) when is_binary(Queue) ->
+consume(Queue, MessagesHandlerPid) when is_binary(Queue),
+                                        is_pid(MessagesHandlerPid) ->
   {ok, QueueSubscription} = esl_rabbitmq_client_amqp:basic_consume(Queue),
   gen_server:call(?MODULE, {consume, QueueSubscription, MessagesHandlerPid}).
 
 
 -spec acknowledge_message(DeliveryTag::integer()) ->
   ok.
-acknowledge_message(DeliveryTag) ->
+acknowledge_message(DeliveryTag) when is_number(DeliveryTag) ->
   {ok, BasicAck} = esl_rabbitmq_client_amqp:basic_ack(DeliveryTag),
   gen_server:cast(?MODULE, {acknowledge_message, BasicAck}).
+
+
+-spec set_prefetch_count(Count::integer()) ->
+  ok.
+set_prefetch_count(Count) when is_number(Count) ->
+  {ok, BasicQos} = esl_rabbitmq_client_amqp:basic_qos(Count),
+  gen_server:call(?MODULE, {set_prefetch_count, BasicQos}).
 
 %% =============================================================================
 %% `gen_server' behaviour callbacks
@@ -315,6 +324,13 @@ handle_call( {consume, QueueSubscription, MsgsHandlerPid}
                                          , QueueSubscription
                                          , MsgsHandlerWorkerPid
                                          ),
+  {reply, ok, State};
+handle_call( {set_prefetch_count, BasicQos}
+           , _From
+           , State = #{channel := Channel}
+           ) ->
+  {ok, BasicQosOK} = esl_rabbitmq_client_amqp:basic_qos_ok(),
+  BasicQosOK = amqp_channel:call(Channel, BasicQos),
   {reply, ok, State};
 handle_call(Request, From, State) ->
   error_logger:info_msg(
