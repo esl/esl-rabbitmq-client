@@ -221,6 +221,14 @@ bind_and_unbind_queue(Config) ->
   esl_rabbitmq_client_worker:unbind_queue(Queue, Exchange, RoutingKey),
   false = binding_exist(Config, Queue, Exchange, RoutingKey),
 
+  ct:comment("Bind without providing the routing_key"),
+  esl_rabbitmq_client_worker:bind_queue(Queue, Exchange),
+  true = binding_exist(Config, Queue, Exchange, <<>>),
+
+  ct:comment("Unbind without providing the routing_key"),
+  esl_rabbitmq_client_worker:unbind_queue(Queue, Exchange),
+  false = binding_exist(Config, Queue, Exchange, <<>>),
+
   ct:comment("Delete queue"),
   esl_rabbitmq_client_worker:delete_queue(Queue),
 

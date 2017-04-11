@@ -13,7 +13,9 @@
         , create_queue/2
         , purge_queue/1
         , delete_queue/1
+        , bind_queue/2
         , bind_queue/3
+        , unbind_queue/2
         , unbind_queue/3
         ]).
 -export([ publish/3
@@ -155,6 +157,14 @@ delete_queue(Queue) when is_binary(Queue) ->
   gen_server:call(?MODULE, {delete_queue, QueueDelete}).
 
 
+% Useful for `fanout' exchanges where the routing_key is ignored
+-spec bind_queue(Queue::binary(), Exchange::binary()) ->
+  ok.
+bind_queue(Queue, Exchange) when is_binary(Queue),
+                                 is_binary(Exchange) ->
+  bind_queue(Queue, Exchange, <<>>).
+
+
 -spec bind_queue(Queue::binary(), Exchange::binary(), RoutingKey::binary()) ->
   ok.
 bind_queue(Queue, Exchange, RoutingKey) when is_binary(Queue),
@@ -165,6 +175,13 @@ bind_queue(Queue, Exchange, RoutingKey) when is_binary(Queue),
                                                        , RoutingKey
                                                        ),
   gen_server:call(?MODULE, {bind_queue, QueueBind}).
+
+
+% bind_queue/2 counterpart
+-spec unbind_queue(Queue::binary(), Exchange::binary()) ->
+  ok.
+unbind_queue(Queue, Exchange) ->
+  unbind_queue(Queue, Exchange, <<>>).
 
 
 -spec unbind_queue(Queue::binary(), Exchange::binary(), RoutingKey::binary()) ->
