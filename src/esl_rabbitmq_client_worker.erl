@@ -197,14 +197,14 @@ unbind_queue(Queue, Exchange, RoutingKey) when is_binary(Queue),
 
 
 -spec publish({ PublishParams::proplists:proplist()
-              , Payload::term()
               , MsgPropsParams::proplists:proplist()
+              , Payload::term()
               }) ->
   ok.
-publish({PublishParams, Payload, MsgPropsParams}) ->
+publish({PublishParams, MsgPropsParams, Payload}) ->
   {ok, Publish, Msg} = esl_rabbitmq_client_amqp:basic_publish( PublishParams
-                                                             , Payload
                                                              , MsgPropsParams
+                                                             , Payload
                                                              ),
   gen_server:cast(?MODULE, {publish, Publish, Msg}).
 
@@ -232,8 +232,8 @@ publish(Exchange, RoutingKey, Payload, DMode) when is_binary(Exchange),
                                                    is_binary(RoutingKey),
                                                    is_number(DMode) ->
   publish({ [ {exchange, Exchange} , {routing_key, RoutingKey} ] % basic.publish
-          , Payload
           , [ {delivery_mode, DMode} ] % P_basic
+          , Payload
           }).
 
 

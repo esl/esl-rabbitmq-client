@@ -218,11 +218,11 @@ queue_unbind_ok() ->
 %% Basic
 %% =============================================================================
 -spec basic_publish( PublishParams::proplists:prolist()
-                   , Payload::term()
                    , MsgPropsParams::proplists:proplist()
+                   , Payload::term()
                    ) ->
   {ok, basic_publish(), amqp_msg()}.
-basic_publish(PublishParams, Payload, MsgPropsParams) ->
+basic_publish(PublishParams, MsgPropsParams, Payload) ->
   % === basic.publish ===
   PublishFields = record_info(fields, 'basic.publish'),
   % basic.publish default values
