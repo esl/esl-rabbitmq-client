@@ -262,8 +262,16 @@ publish(_Config) ->
   ct:comment("Publish to direct exchange"),
   esl_rabbitmq_client_worker:publish(Exchange, RoutingKey, Payload),
 
+  ct:comment("Publish using publish/1 function"),
+  esl_rabbitmq_client_worker:publish({ [ {exchange, Exchange}
+                                       , {routing_key, RoutingKey}
+                                       ]
+                                     , []
+                                     , Payload
+                                     }),
+
   ct:comment("Clean up"),
-  2 = esl_rabbitmq_client_worker:delete_queue(Queue),
+  3 = esl_rabbitmq_client_worker:delete_queue(Queue),
   esl_rabbitmq_client_worker:delete_exchange(Exchange),
 
   {comment, ""}.

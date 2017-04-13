@@ -18,7 +18,8 @@
         , unbind_queue/2
         , unbind_queue/3
         ]).
--export([ publish/3
+-export([ publish/1
+        , publish/3
         , publish/4
         , consume/2
         , acknowledge_message/1
