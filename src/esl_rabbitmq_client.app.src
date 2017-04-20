@@ -1,0 +1,11 @@
+{ application
+, esl_rabbitmq_client
+, [ {description, "ESL wrapper on top of RabbitMQ Erlang client"}
+  , {vsn, "0.0.1"}
+  , {modules, []}
+  , {registered, []}
+  , {env, []}
+  , {mod, {esl_rabbitmq_client, []}}
+  , {applications, [kernel, stdlib]}
+  ]
+}.
